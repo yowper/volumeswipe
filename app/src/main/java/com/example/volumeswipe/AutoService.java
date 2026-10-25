@@ -391,28 +391,29 @@ public class AutoService extends AccessibilityService {
         handler.removeCallbacks(volPollTask);
     }
 
-    // ==================== 蓝牙音量下键（v2.26 简化） ====================
-    // 用户要求：不再做「两下」判定——短剧模式识别到【一下】就：记音量 → 上拉 → 恢复音量。
-    // 之前那套两下状态机（含窗口参数）整个删掉，免得再出不稳定。
+    // ==================== 蓝牙音量键（v2.33） ====================
+    // 短剧模式：上键按一下 = 播放/暂停（音量 -1 补回上调前）；
+    //           下键按一下 = 摇一摇 = 广告命令（先静音→截图读秒→上拉→恢复声音）。
+    //           音量还原规则（用户要求 v2.33 定稿）：
+    //           · 摇一摇/语音的广告命令 → 恢复到禁音前的音量，不加一；
+    //           · 只有蓝牙下键触发的那一轮 → 恢复时音量 +1 回到按下前的值
+    //             （因为按下键系统已经把音量 -1 了，+1 才等于回到原音量）。
 
-    /** 短剧模式、蓝牙音量下键：直接执行【下集】（用户要求 v2.30：不再还原音量） */
-    private void fireVolPull(final int restore) {
+    /** 短剧模式、蓝牙音量下键：和摇一摇同一套广告命令流程。
+     *  按下后系统已经把音量 -1，所以恢复时音量要 +1 回到按下前。 */
+    private void fireVolDownDrama(final int orig) {
         if (!isIdle()) {
             KeepService.note("耳机音量下调忽略了：正在识别一轮命令");
             return;
         }
-        KeepService.note("蓝牙耳机音量下键 → 下集（不还原音量）");
-        handler.post(new Runnable() {
-            @Override
-            public void run() {
-                if (executeCommand(Commands.CMD_NEXT, "耳机音量下键")) {
-                    toastResult(Commands.CMD_NEXT, "耳机下键：下集");
-                } else {
-                    KeepService.note("下集被防重/守卫拦住（原因看上一条日志）");
-                    toast("下集被拦：可能刚滑过一次，原因看日志");
-                }
-            }
-        });
+        KeepService.note("短剧：蓝牙耳机音量下键 → 广告命令（先静音 → 截图读秒 → 上拉 → 恢复声音），"
+                + "恢复时音量 +1 还原到 " + orig);
+        btVolRestoreTarget = orig;
+        if (!executeCommand(Commands.CMD_SKIP_AD, "蓝牙耳机音量下键")) {
+            btVolRestoreTarget = -1;
+            KeepService.note("下键的广告命令被防重/守卫拦住（原因看上一条日志）");
+            toast("广告命令被拦：可能刚执行过一次，原因看日志");
+        }
     }
 
     /** 检测到一次音量上调（before = 上调前的音量） */
@@ -425,39 +426,23 @@ public class AutoService extends AccessibilityService {
             KeepService.note("耳机音量上调忽略了：正在识别一轮命令");
             return;
         }
-        // 阅读模式：蓝牙音量上键【一下】= 上一页 + 音量 -1 补回（用户要求 v2.30）
+        // 阅读模式：蓝牙音量上键【一下】= 上一页 + 音量 -1 补回
         if (readingOn()) {
             fireVolPageUp(before);
             return;
         }
         if (shortDramaOn()) {
-            // 短剧模式（用户要求 v2.31）：上键 = 广告命令完整流程
-            fireVolUpDrama(before);
+            // 用户要求 v2.33：短剧模式上键【一下】= 播放/暂停 + 音量 -1 补回上调前
+            fireVolTogglePlay(before);
             return;
         }
         KeepService.note("耳机音量上调（普通模式只调音量，不触发动作）");
     }
 
-    /** 蓝牙上键的音量还原目标（上调前的值）；-1 = 没有 override */
-    private int btUpRestoreVol = -1;
-
-    /** 短剧模式、蓝牙音量上键（用户要求 v2.31）：和广告命令同一套流程 ——
-     *  先静音 → 截图读秒 → 没有秒就先上拉 → 恢复声音，同时音量 -1 还原到上调前。
-     *  （还原目标用 btUpRestoreVol 带进静音/恢复流程：恢复声音时顺手把音量退回 -1） */
-    private void fireVolUpDrama(final int orig) {
-        if (!isIdle()) {
-            KeepService.note("耳机音量上调忽略了：正在识别一轮命令");
-            return;
-        }
-        KeepService.note("短剧：蓝牙音量上键 → 广告命令（先静音 → 截图读秒 → 上拉 → 恢复声音），"
-                + "恢复时音量 -1 还原到 " + orig);
-        btUpRestoreVol = orig;
-        if (!executeCommand(Commands.CMD_SKIP_AD, "蓝牙音量上键")) {
-            btUpRestoreVol = -1;
-            KeepService.note("上键的广告命令被防重/守卫拦住（原因看上一条日志）");
-            toast("广告命令被拦：可能刚执行过一次，原因看日志");
-        }
-    }
+    /** 蓝牙【下键】的音量还原目标（按下前的值）；-1 = 没有 override。
+     *  摇一摇/语音的广告命令不设它（恢复到禁音前原音量，不加一）；
+     *  只有下键那轮设：按下时系统已经 -1，恢复时 +1 回到这个值。 */
+    private int btVolRestoreTarget = -1;
 
     /** 阅读模式、蓝牙音量上键：上一页 + 音量 -1 补回上调前 */
     private void fireVolPageUp(final int restore) {
@@ -481,6 +466,35 @@ public class AutoService extends AccessibilityService {
                 }
                 if (executeCommand(Commands.CMD_PAGE_UP, "耳机音量上调")) {
                     toastResult(Commands.CMD_PAGE_UP, "耳机上调音量：上一页（翻书）");
+                }
+            }
+        });
+    }
+
+    /** 短剧模式、蓝牙音量上键【一下】（用户要求 v2.33）：播放/暂停 + 音量 -1 补回上调前。
+     *  结构和阅读模式的 fireVolPageUp 一样：先把系统按上键多出来的 +1 退回去，
+     *  再在 (50%,20%) 点一下（播放/暂停命令就点这里）。 */
+    private void fireVolTogglePlay(final int restore) {
+        KeepService.note("蓝牙耳机音量上调了一下 → 播放/暂停，音量 -1 补回 " + restore);
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                    if (am != null) {
+                        int now2 = am.getStreamVolume(AudioManager.STREAM_MUSIC);
+                        if (now2 > restore) {
+                            markVolSelf();
+                            am.setStreamVolume(AudioManager.STREAM_MUSIC, restore, 0);
+                            KeepService.note("音量已补回：" + now2 + " → "
+                                    + am.getStreamVolume(AudioManager.STREAM_MUSIC));
+                        }
+                    }
+                } catch (Throwable t2) {
+                    KeepService.note("音量补回失败：" + t2.getClass().getSimpleName());
+                }
+                if (executeCommand(Commands.CMD_TOGGLE_PLAY, "耳机音量上调")) {
+                    toastResult(Commands.CMD_TOGGLE_PLAY, "耳机上键：播放/暂停");
                 }
             }
         });
@@ -550,9 +564,9 @@ public class AutoService extends AccessibilityService {
             KeepService.note("耳机音量下调（普通模式只调音量，不开阅读/短剧不触发动作）");
             return;
         }
-        // 短剧模式（用户要求 v2.30）：【一下】就触发：蓝牙下键 = 下集（不还原音量）
-        KeepService.note("蓝牙耳机音量下调了一下 → 下集，");
-        fireVolPull(before);
+        // 短剧模式（用户要求 v2.32）：【一下】就触发：蓝牙下键 = 广告命令 + 音量 +1 还原
+        KeepService.note("蓝牙耳机音量下调了一下 → 广告命令，");
+        fireVolDownDrama(before);
     }
 
     @Override
@@ -727,7 +741,7 @@ public class AutoService extends AccessibilityService {
 
     // ==================== 短剧模式 ====================
 
-    /** 短剧模式是不是开着（用户要求：短剧模式只听 下集/上集/广告/直播） */
+    /** 短剧模式是不是开着（用户要求：短剧模式只听 停/暂停/播放） */
     public boolean shortDramaOn() {
         return getSharedPreferences("cfg", MODE_PRIVATE).getBoolean("shortDrama", false);
     }
@@ -736,20 +750,25 @@ public class AutoService extends AccessibilityService {
     public void setShortDrama(boolean on, String why) {
         boolean old = shortDramaOn();
         getSharedPreferences("cfg", MODE_PRIVATE).edit().putBoolean("shortDrama", on).apply();
+        if (manualBoxOpen) {
+            manualBoxOpen = false;
+            // 手动框开着时本地引擎只听「手动」，强制关框要把完整词表换回来（v2.35）
+            KeepService.applyVoiceSetting(this);
+        }
         if (old != on) {
-            postStatus(on ? "短剧模式：已开启（只收 蓝牙下键=下集、摇一摇=广告、停/暂停/播放 和自己录的命令）"
+            postStatus(on ? "短剧模式：已开启（只收 蓝牙上键=播放/暂停、下键/摇一摇=广告、停/暂停/播放 和自己录的命令）"
                     : "短剧模式：已关闭（恢复接收所有命令）");
-            showIdleBox(); // 模式切了，待命小框跟着换（文本框 ↔ 小字提示）
+            showIdleBox(); // 模式切了：短剧里不显示手动命令框（用户要求 v2.33）
             KeepService.note((on ? "短剧模式已开启" : "短剧模式已关闭")
                     + (why == null || why.length() == 0 ? "" : "：" + why));
         }
     }
 
-    /** 短剧模式允许的命令（用户要求 v2.31：其他命令无效）：
+    /** 短剧模式允许的命令（用户要求 v2.32：其他命令无效）：
      *  只收 停/暂停/播放；
      *  + 「短剧」（再说一次就退出短剧模式）+「小白再见」（安全阀）。
      *  自己录的命令不在这里面 —— resolveCmd 里它优先放行；
-     *  蓝牙下键/上键、摇一摇不走这里（poller/传感器直接触发）。 */
+     *  蓝牙上键(播放/暂停)、下键/摇一摇不走这里（poller/传感器直接触发）。 */
     private static boolean isDramaCmd(int cmd) {
         return cmd == Commands.CMD_DRAMA_TOGGLE
                 || cmd == Commands.CMD_TOGGLE_PLAY || cmd == Commands.CMD_RESUME
@@ -771,7 +790,7 @@ public class AutoService extends AccessibilityService {
      * 统一的命令解析（所有语音路径都走这里，不要再直接用 Commands.match）：
      * ① 录制模式：用户自己录的语音命令名（RecordedCmds）→ CMD_RECORDED
      *    （用户要求：录的就是拿来退广告的，【短剧模式里也要能用】，所以最先判）
-     * ② 短剧模式：只收 下集/上集/广告/直播 + 「短剧」（退出用）+「小白再见」，
+     * ② 短剧模式：只收 停/暂停/播放 + 「短剧」（退出用）+「小白再见」，
      *    其他命令一律不接收（不执行、不在屏幕下方显示）
      * ③ 正常命令表
      *
@@ -1153,6 +1172,10 @@ public class AutoService extends AccessibilityService {
         if (useDoubao()) {
             showIdleBox();
             KeepService.listenVocab(WakeEngine.idleVocab(), "在听唤醒词：说「嗨小白」");
+        } else if (manualBoxOpen) {
+            // 免豆包模式：「手动」开的命令框留在屏幕上（v2.35）
+            showIdleBox();
+            KeepService.listenVocab(WakeEngine.commandVocab(), "直接听命令（不用豆包）");
         } else {
             // 免豆包模式屏幕上不该有编辑框
             removeBox();
@@ -1293,12 +1316,17 @@ public class AutoService extends AccessibilityService {
 
     // ==================== 待命命令条 ====================
 
-    /** 待命小框（v2.31 改版）：
-     *  非短剧、非阅读模式 = 文本命令框（最开始那个小框 + OK 按钮）：
-     *  有焦点、弹键盘、自动点一下豆包 Mic；输入后点 OK 就执行，错误命令也下达。
-     *  短剧/阅读模式 = 只显示一行小字提示（不出编辑框）。 */
+    /** 待命小框（v2.33 改版，用户要求）：
+     *  只干一件事 = 手动命令编辑框：说「手动」弹出（仅普通模式），
+     *  说「手动」再关掉并执行框里的命令。
+     *  之前短剧/阅读模式的「小字提示」整个删了——那两种模式屏幕上什么都不显示
+     *  （用户要求：编辑框只用于接收手动命令）。 */
     public void showIdleBox() {
         removeBox();
+        // 只在「手动」框开着、且非短剧/非阅读时才显示；其他情况一律不出框
+        if (!manualBoxOpen || shortDramaOn() || readingOn()) {
+            return;
+        }
         if (wm == null) {
             wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
         }
@@ -1306,159 +1334,91 @@ public class AutoService extends AccessibilityService {
             return;
         }
         final int density = (int) getResources().getDisplayMetrics().density;
-        final boolean textMode = !shortDramaOn() && !readingOn();
-        final int boxW = (textMode ? 150 : 96) * density;
-        final int boxH = (textMode ? 30 : 26) * density;
-        final int closeW = 26 * density;
+        final int boxW = 150 * density;
+        final int boxH = 30 * density;
 
         box = new FrameLayout(this);
         idleTv = null;
         boxEdit = null;
-        boolean focusable;
-        if (textMode) {
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setBackgroundColor(0xDD000000);
 
-            final EditText et = new EditText(this);
-            et.setHint("输入命令，点OK执行");
-            et.setTextColor(0xFFFFFFFF);
-            et.setHintTextColor(0xFFAAAAAA);
-            et.setBackgroundColor(0x00000000);
-            et.setPadding(8, 2, 4, 2);
-            et.setTextSize(11f);
-            et.setSingleLine(true);
-            et.setInputType(InputType.TYPE_CLASS_TEXT);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setBackgroundColor(0xDD000000);
 
-            TextView okBtn = new TextView(this);
-            okBtn.setText("OK");
-            okBtn.setTextColor(0xFFFFFFFF);
-            okBtn.setTextSize(12f);
-            okBtn.setGravity(Gravity.CENTER);
-            okBtn.setBackgroundColor(0xFF2E7D32);
-            okBtn.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    executeTextCommand(et.getText().toString());
-                }
-            });
+        final EditText et = new EditText(this);
+        et.setHint("输入命令，说「手动」执行");
+        et.setTextColor(0xFFFFFFFF);
+        et.setHintTextColor(0xFFAAAAAA);
+        et.setBackgroundColor(0x00000000);
+        et.setPadding(8, 2, 4, 2);
+        et.setTextSize(11f);
+        et.setSingleLine(true);
+        et.setInputType(InputType.TYPE_CLASS_TEXT);
 
-            row.addView(et, new LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
-            row.addView(okBtn, new LinearLayout.LayoutParams(
-                    closeW * 2, LinearLayout.LayoutParams.MATCH_PARENT));
-            box.addView(row, new FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT, boxH));
-            boxEdit = et;
-            focusable = true;
-        } else {
-            TextView tv = new TextView(this);
-            tv.setText(shortDramaOn() ? "短剧模式 · 摇一摇=广告" : "阅读模式");
-            tv.setTextColor(0xFFFFFFFF);
-            tv.setTextSize(10f);
-            tv.setGravity(Gravity.CENTER);
-            tv.setBackgroundColor(0xAA000000);
-            box.addView(tv, new FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT));
-            idleTv = tv;
-            focusable = false;
-        }
+        row.addView(et, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
+        box.addView(row, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, boxH));
+        boxEdit = et;
 
         int[] pos = boxPos();
         boxLp = new WindowManager.LayoutParams(
                 boxW, boxH, winType(),
-                (focusable ? 0 : WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
         boxLp.gravity = Gravity.TOP | Gravity.START;
         boxLp.x = pos[0];
         boxLp.y = pos[1];
-        if (focusable) {
-            boxLp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
-                    | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
-        }
-
-        // 拖动（只在小字提示模式；文本框要打字，不拖）
-        if (!textMode) {
-            final FrameLayout fl2 = box;
-            idleTv.setOnTouchListener(new View.OnTouchListener() {
-                private float dx, dy;
-                private int sx, sy;
-
-                @Override
-                public boolean onTouch(View v, MotionEvent e) {
-                    switch (e.getActionMasked()) {
-                        case MotionEvent.ACTION_DOWN:
-                            dx = e.getRawX();
-                            dy = e.getRawY();
-                            sx = boxLp.x;
-                            sy = boxLp.y;
-                            return true;
-                        case MotionEvent.ACTION_MOVE:
-                            boxLp.x = sx + (int) (e.getRawX() - dx);
-                            boxLp.y = sy + (int) (e.getRawY() - dy);
-                            clampLp(boxLp);
-                            try {
-                                wm.updateViewLayout(fl2, boxLp);
-                            } catch (Exception ignored) {
-                            }
-                            return true;
-                        case MotionEvent.ACTION_UP:
-                            getSharedPreferences("cfg", MODE_PRIVATE).edit()
-                                    .putInt("box_x", boxLp.x)
-                                    .putInt("box_y", boxLp.y)
-                                    .apply();
-                            return true;
-                        default:
-                            return false;
-                    }
-                }
-            });
-        }
+        boxLp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE
+                | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
 
         try {
             wm.addView(box, boxLp);
         } catch (Exception e) {
             box = null;
-            idleTv = null;
             boxEdit = null;
             return;
         }
-        if (textMode && boxEdit != null) {
-            // 用户要求：编辑框获得焦点 + 自动点一下豆包 Mic
-            boxEdit.setFocusable(true);
-            boxEdit.setFocusableInTouchMode(true);
-            boxEdit.requestFocus();
-            idleMicTries = 0;
-            idleMicDelayDone = false;
-            handler.removeCallbacks(idleMicTask);
-            handler.post(idleMicTask);
-        }
+
+        // v2.34（借用嗨小白）：抢焦点 → 等 200ms 让键盘弹出来 → 探测到豆包输入法再点 Mic（idleMicTask）。
+        // 没有任何时限收框：框一直开着，直到再听到「手动」才关框并执行（用户要求）。
+        et.setFocusable(true);
+        et.setFocusableInTouchMode(true);
+        et.requestFocus();
+        idleMicTries = 0;
+        idleMicDelayDone = false;
+        idleMicExtraTaps = 0;
+        handler.removeCallbacks(idleMicTask);
+        handler.removeCallbacks(idleMicVerifyTask);
+        handler.postDelayed(idleMicTask, 200);
     }
 
-    /** 文本命令框：等键盘弹出后自动点一下豆包 Mic（v2.31） */
+    /** 手动命令框：等键盘真的弹出来再点豆包 Mic（v2.33，借嗨小白 micClickTask 的逻辑）。
+     *  豆包键盘弹得慢，不等就点＝点在视频画面上——这正是「手动」点不开 Mic 的根因。 */
     private int idleMicTries = 0;
     private boolean idleMicDelayDone = false;
+    private int idleMicExtraTaps = 0;
 
     private final Runnable idleMicTask = new Runnable() {
         @Override
         public void run() {
-            if (boxEdit == null || !isIdle() || shortDramaOn() || readingOn()) {
-                return; // 框没了/进了流程/切了模式就不点
+            if (boxEdit == null || !manualBoxOpen) {
+                return; // 框没了 / 「手动」已把框关了：不点
             }
+            // 豆包键盘弹得慢：一直等到它真的出现才点（最多约 4 秒，每 6 次催一下键盘）
             if (!imeWindowVisible() && idleMicTries < 50) {
                 idleMicTries++;
                 if (idleMicTries == 1 || idleMicTries % 13 == 0) {
-                    KeepService.note("文本命令框：还在等键盘弹出来…");
+                    KeepService.note("手动命令框：还在等键盘弹出来…");
                 }
                 if (idleMicTries % 6 == 0) {
-                    showIme();
+                    showIme();   // 再催一下系统把键盘弹出来
                 }
                 handler.postDelayed(this, MIC_POLL_MS);
                 return;
             }
+            // 键盘出来了 → 再按设置里的「点 Mic 前延时」等一下（默认 200ms）
             if (!idleMicDelayDone) {
                 idleMicDelayDone = true;
                 int delay = Math.max(0, Math.min(3000,
@@ -1467,8 +1427,38 @@ public class AutoService extends AccessibilityService {
                 handler.postDelayed(this, delay);
                 return;
             }
+            boolean imeSeen = imeWindowVisible();
             blindTapMic();
-            KeepService.note("文本命令框：已点豆包 Mic（说也行、打也行，点 OK 执行）");
+            int[] mp = micPos();
+            KeepService.note((imeSeen ? "手动命令框：键盘已出来，已点豆包 Mic（"
+                    : "手动命令框：键盘一直没出来，仍按坐标点了一次 Mic（")
+                    + mp[0] + "%," + mp[1] + "%）。说也行、打也行，说「手动」就执行");
+            // 嗨小白的保险：点完 1 秒还没动静（框没字、语音界面也没出来）→ 补点一次
+            handler.removeCallbacks(idleMicVerifyTask);
+            handler.postDelayed(idleMicVerifyTask, 1000);
+        }
+    };
+
+    private final Runnable idleMicVerifyTask = new Runnable() {
+        @Override
+        public void run() {
+            if (boxEdit == null || !manualBoxOpen) {
+                return;
+            }
+            if (boxText().length() > 0) {
+                KeepService.note("豆包已在往输入框写字 ✓");
+                return;
+            }
+            if (voicePanelVisible()) {
+                KeepService.note("豆包语音界面已出现 ✓");
+                return;
+            }
+            if (idleMicExtraTaps < 1) {
+                idleMicExtraTaps++;
+                int[] mp = micPos();
+                tapAt(mp[0], mp[1]);
+                KeepService.note("1 秒没动静，又补点了一下 Mic（" + mp[0] + "%," + mp[1] + "%）");
+            }
         }
     };
 
@@ -1480,6 +1470,9 @@ public class AutoService extends AccessibilityService {
 
     /** 移除屏幕上的条/框 */
     public void removeBox() {
+        // 手动命令框的等键盘/补点任务一起停掉，免得框没了还在点屏幕
+        handler.removeCallbacks(idleMicTask);
+        handler.removeCallbacks(idleMicVerifyTask);
         if (box != null && wm != null) {
             try {
                 wm.removeView(box);
@@ -1497,7 +1490,7 @@ public class AutoService extends AccessibilityService {
             if (phase != PHASE_IDLE) {
                 return; // 激活中的框不动，这轮结束后 backToIdle 会按新模式处理
             }
-            if (useDoubao()) {
+            if (useDoubao() || manualBoxOpen) {
                 showIdleBox();
             } else {
                 removeBox();
@@ -1776,8 +1769,27 @@ public class AutoService extends AccessibilityService {
      * 视频根本没动，看起来就是“拉到一半又弹回去了”。
      */
     private void whenImeGone(final Runnable action) {
+        // 手动命令框开着时：手势做完把焦点和键盘还给编辑框（用户要求 v2.34：编辑框不失焦）
+        final Runnable act = new Runnable() {
+            @Override
+            public void run() {
+                action.run();
+                if (manualBoxOpen && boxEdit != null) {
+                    handler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (manualBoxOpen && boxEdit != null) {
+                                boxEdit.requestFocus();
+                                showIme();
+                                KeepService.note("手动命令框：命令做完，焦点和键盘已还给编辑框");
+                            }
+                        }
+                    }, 400);
+                }
+            }
+        };
         if (!imeWindowVisible() && !isImeShowing()) {
-            action.run();
+            act.run();
             return;
         }
         hideIme();
@@ -1787,14 +1799,14 @@ public class AutoService extends AccessibilityService {
             @Override
             public void run() {
                 if (!imeWindowVisible() && !isImeShowing()) {
-                    action.run();
+                    act.run();
                     return;
                 }
                 hideIme();
                 if (++tries[0] < 8) {
                     handler.postDelayed(again[0], 300);
                 } else {
-                    action.run();   // 一直收不掉也照做
+                    act.run();   // 一直收不掉也照做
                 }
             }
         };
@@ -1930,7 +1942,7 @@ public class AutoService extends AccessibilityService {
         startAdOrLiveWatch("退出直播");
     }
 
-    /** 用户要求：广告/直播流程【先静音，上拉前恢复音量】。
+    /** 用户要求：广告/直播流程【先静音，上拉后再恢复音量】。
      *  只记流程自己禁的音：之前已经手动禁音的话不重复禁（防止把「禁音前音量」记成 0）。 */
     private void muteForSkipFlow(String tag) {
         if (skipFlowMuted) {
@@ -1942,20 +1954,20 @@ public class AutoService extends AccessibilityService {
                 KeepService.note(tag + "：本来就是禁音状态，流程不再重复禁音");
                 return;
             }
-            KeepService.note(tag + "：先禁音（上拉前自动恢复音量）");
+            KeepService.note(tag + "：先禁音（上拉后自动恢复音量）");
             setMediaMute(true);
             skipFlowMuted = true;
         } catch (Throwable ignored) {
         }
     }
 
-    /** 上拉前恢复音量（只恢复流程自己禁的音，手动禁的不动） */
+    /** 上拉之后恢复音量（只恢复流程自己禁的音，手动禁的不动） */
     private void unmuteForSkipFlow(String tag) {
         if (!skipFlowMuted) {
             return;
         }
         skipFlowMuted = false;
-        KeepService.note(tag + "：上拉前恢复音量");
+        KeepService.note(tag + "：上拉完成，恢复音量");
         setMediaMute(false);
     }
 
@@ -2083,9 +2095,8 @@ public class AutoService extends AccessibilityService {
         }
         swipeChainActive = true;
         swipesDone = 0;
-        // 用户要求：上拉前恢复音量（流程开始时禁的）
-        unmuteForSkipFlow(tag);
-        postStatus(tag + "：确认没有读秒 → 上滑（只滑这一次）");
+        // 用户要求 v2.33：【先上拉，滑完再恢复音量】（含蓝牙下键带来的 +1 还原）
+        postStatus(tag + "：确认没有读秒 → 上滑（只滑这一次；滑完恢复音量）");
         runAfterResume(new Runnable() {
             @Override
             public void run() {
@@ -2094,6 +2105,10 @@ public class AutoService extends AccessibilityService {
                     public void run() {
                         swipeUpOnly();
                         swipesDone = 1;
+                        // 用户要求 v2.33：上拉发出去之后才恢复音量。
+                        // 恢复值：摇一摇/语音的广告 → 禁音前原音量（不加一）；
+                        //         蓝牙下键那轮 → btVolRestoreTarget=按下前的值（相当于 +1）
+                        unmuteForSkipFlow(tag);
                         handler.postDelayed(new Runnable() {
                             @Override
                             public void run() {
@@ -3069,8 +3084,20 @@ public class AutoService extends AccessibilityService {
      */
     public void ensureOverlayAlive() {
         try {
-            if (!useDoubao()) {
-                // 免豆包模式：屏幕上不该有任何框，有残留就清掉
+            // 用户要求 v2.33（半小时环境检查的补充，这里每 2.5 秒就能查一次）：
+            // 识别状态卡死（ARMED/DOUBAO 超时 1 分钟没回待命）会让本地语音一直停在
+            // 「豆包识别中…」的暂停词表上，命令再也收不到 → 强制回待命、换回命令词表
+            long nowMs = System.currentTimeMillis();
+            if ((phase == PHASE_DOUBAO && nowMs > doubaoDeadline + 60000L)
+                    || (phase == PHASE_ARMED && nowMs > armedDeadline + 60000L)) {
+                KeepService.note("识别状态卡住超过 1 分钟 → 强制回待命，恢复本地语音");
+                backToIdle();
+                return;
+            }
+            if (!useDoubao() && !manualBoxOpen) {
+                // 免豆包模式：屏幕上不该有任何框，有残留就清掉。
+                // 「手动」开的命令框除外（v2.35）：它是用户点名要的输入通道，
+                // 不受豆包开关影响——否则看门狗每 2.5 秒就把框清一次，看起来就是"弹一下就没了"
                 if (box != null) {
                     removeBox();
                 }
@@ -3105,8 +3132,8 @@ public class AutoService extends AccessibilityService {
     // ==================== 输入法麦克风 ====================
 
     private static final int MIC_MIN_Y = 45;   // 节点扫描时：Mic 键一定在屏幕下半部（低于这个百分比的不算）
-    /** 键盘上豆包麦克风/语音键的默认位置：实测就是这个（横向 22%，纵向 66%） */
-    private static final int MIC_DEF_X = 22;
+    /** 键盘上豆包麦克风/语音键的默认位置（用户标定 v2.34：横向 32%，纵向 66%） */
+    private static final int MIC_DEF_X = 32;
     private static final int MIC_DEF_Y = 66;
 
     private static final String[] MIC_WORDS = {
@@ -3769,6 +3796,11 @@ public class AutoService extends AccessibilityService {
     private void toggleReading() {
         boolean on = !readingOn();
         getSharedPreferences("cfg", MODE_PRIVATE).edit().putBoolean("reading", on).apply();
+        if (manualBoxOpen) {
+            manualBoxOpen = false;
+            // 手动框开着时本地引擎只听「手动」，强制关框要把完整词表换回来（v2.35）
+            KeepService.applyVoiceSetting(this);
+        }
         if (!on) {
             toast("阅读模式已关");
             KeepService.note("阅读模式已关（上页/下页/蓝牙音量键翻页随之失效）");
@@ -3837,32 +3869,37 @@ public class AutoService extends AccessibilityService {
 
     // 旧手动框已删除（用户要求 v2.30）：「手动」改开文本命令框（showTextBox）
     private LinearLayout manualLayer;
+    private boolean manualBoxOpen = false;
+    /** 手动框这次是几时开的（开框 3 秒内的「手动」当回声忽略，防识别两遍关掉框） */
+    private long manualOpenedAt = 0L;
 
-    /** 文本命令框（用户要求 v2.30）：原「啨小白」唤醒编辑框改造。
+    /** 手动命令框（用户要求 v2.33）：原「嗨小白」唤醒编辑框改造。
      *  说「手动」弹出：只在非短剧、非阅读模式；框有焦点、自动弹键盘、
-     *  自动点一下豆包输入法的 Mic（想说的可以说）；旁边的 OK 点了就执行，
-     *  错误命令也照样下达（不过模式白名单，直接执行通道）。 */
+     *  等键盘真的弹出来才点豆包 Mic（idleMicTask，借用嗨小白的等键盘逻辑），
+     *  想说可以说、想打可以打；没有时间限制——直到再听到「手动」才关框并执行框里的命令。 */
     private void showTextBox(String why) {
         // v2.31：文本命令框就是待命小框（showIdleBox 的文本模式），不再另起一套
         KeepService.note(why);
         showIdleBox();
     }
 
-    /** 文本命令框 OK 按钮：不管对错都下达 —— 认得出就执行；认不出也记日志+提示 */
+    /** 手动命令框执行：不管对错都下达 —— 认得出就执行；认不出也记日志+提示 */
     private void executeTextCommand(String raw) {
-        String t = Commands.normalize(raw);
+        // v2.36：豆包语音会往框里塞标点和「手动」回声——
+        // normalize 去标点，stripManualEcho 去「手动」，两道都过再匹配，命令才执行得了
+        String t = stripManualEcho(Commands.normalize(raw));
         if (t.length() == 0) {
-            toast("先输入命令再点 OK");
+            toast("框里没有命令");
             return;
         }
         // 不过模式白名单：错误命令也下达（用户要求）
         int cmd = Commands.match(t);
         if (cmd == Commands.CMD_NONE) {
-            KeepService.note("文本命令框下达：「" + t + "」（命令表里没有，不执行）");
+            KeepService.note("手动命令框下达：「" + t + "」（命令表里没有，不执行）");
             toast("「" + t + "」不在命令表里");
             return;
         }
-        KeepService.note("文本命令框执行：「" + t + "」");
+        KeepService.note("手动命令框执行：「" + t + "」");
         if (executeCommand(cmd, t)) {
             toastResult(cmd, "执行：" + t);
             // 框留着（待命小框本来就该在），只清空文字好继续输
@@ -3870,8 +3907,59 @@ public class AutoService extends AccessibilityService {
                 boxEdit.setText("");
             }
         } else {
-            KeepService.note("文本命令框：「" + t + "」被拦，没有执行（原因看上一条日志）");
+            KeepService.note("手动命令框：「" + t + "」被拦，没有执行（原因看上一条日志）");
             toast("被拦：原因看日志");
+        }
+    }
+
+    /** v2.36：去掉豆包写进框里的「手动」回声（说「手动」结束时输入法常把它一起写进框）。
+     *  命令表里没有任何命令含这两个字，整串删掉再匹配；
+     *  不然 match() 会先命中 CMD_MANUAL（它排在下一集等命令前面），命令就执行不了。 */
+    private static String stripManualEcho(String t) {
+        if (t == null) {
+            return "";
+        }
+        return t.replace("手动", "");
+    }
+
+    /** v2.36：等豆包把字写完再关框执行。
+     *  每 300ms 读一次框：文字和上一次一样（= 写完了）就收尾；最多等 5 拍约 1.5 秒。
+     *  手动打字的第一个 300ms 就稳定，基本无感。 */
+    private void settleBoxThenClose() {
+        final String[] prev = {boxEdit == null ? "" : boxEdit.getText().toString()};
+        final int[] tries = {0};
+        final Runnable[] check = new Runnable[1];
+        check[0] = new Runnable() {
+            @Override
+            public void run() {
+                if (!manualBoxOpen || boxEdit == null) {
+                    return; // 等待期间框被关了（切模式/退出）：不用再收尾
+                }
+                String cur = boxEdit.getText().toString();
+                tries[0]++;
+                boolean stable = cur.equals(prev[0]);
+                prev[0] = cur;
+                if (!stable && tries[0] < 5) {
+                    handler.postDelayed(this, 300);  // 豆包还在往框里写字，再等一拍
+                    return;
+                }
+                finishManualClose(cur);
+            }
+        };
+        handler.postDelayed(check[0], 300);
+    }
+
+    /** 手动框收尾（v2.36）：关框 + 恢复完整词表 + 清洗（去标点/去「手动」回声）后执行 */
+    private void finishManualClose(String raw) {
+        manualBoxOpen = false; // 先关标志：万一框里的字清洗后还是「手动」相关，不再递归
+        showIdleBox();
+        KeepService.applyVoiceSetting(this); // 换回完整词表，恢复听全部命令
+        String norm = stripManualEcho(Commands.normalize(raw));
+        if (norm.length() == 0) {
+            KeepService.note("手动命令框：清洗后框里没有命令（原文「" + raw + "」），只关框不执行");
+            toast("框里没有命令：已关闭命令框");
+        } else {
+            executeTextCommand(raw);
         }
     }
 
@@ -4370,9 +4458,27 @@ public class AutoService extends AccessibilityService {
                 replayRecorded(text);
                 break;
             case Commands.CMD_MANUAL:
-                // 「手动」= 打开文本命令框（用户要求 v2.30：原啨小白编辑框改造），
-                // 只在非短剧、非阅读模式里开（短剧/阅读的白名单里没有手动，到不了这里）
-                showTextBox("文本命令框：输入后点 OK 执行（会自动点一下豆包 Mic）");
+                if (manualBoxOpen && boxEdit != null) {
+                    // v2.35 回声保护：本地引擎会把同一声「手动」上报两遍（临时结果+最终结果，
+                    // 间隔可超过防重的 1.5 秒），第二遍会把刚开的框又关掉——
+                    // 开框后 3 秒内的「手动」一律当回声忽略，这就是"框弹一下就没"的根因之一
+                    if (System.currentTimeMillis() - manualOpenedAt < 3000) {
+                        KeepService.note("手动命令框：开框 3 秒内的「手动」当回声忽略（防同一声识别两遍关掉框）");
+                        break;
+                    }
+                    // v2.36：本地引擎听到「手动」时，豆包可能还没把最后几个字写进框
+                    //（含标点和「手动」回声）——等框里文字稳定再关框执行（最多约 1.5 秒）
+                    settleBoxThenClose();
+                } else {
+                    // 说「手动」= 打开命令框：焦点 → 等 200ms → 探测到豆包键盘 → 点 Mic（idleMicTask）
+                    manualBoxOpen = true;
+                    manualOpenedAt = System.currentTimeMillis();
+                    showIdleBox();
+                    // v2.35（学嗨小白把麦克风让干净）：开框期间本地引擎【只听「手动」】，
+                    // 别的话全部交给豆包 Mic 写进框——不然同一句命令会被本地引擎抢先执行一遍
+                    KeepService.listenVocab(new String[]{"手动"},
+                            "手动命令框开着：只听「手动」（说完命令再说一次「手动」执行）");
+                }
                 break;
             case Commands.CMD_READING_TOGGLE:
                 // 「阅读」= 开关阅读模式（开：自动打开阅读软件 + 点一次 50%,20%）
@@ -4425,10 +4531,11 @@ public class AutoService extends AccessibilityService {
             int stream = AudioManager.STREAM_MUSIC;
             SharedPreferences sp = getSharedPreferences("cfg", MODE_PRIVATE);
             int before = am.getStreamVolume(stream);
-            if (mute && btUpRestoreVol >= 0) {
-                // 蓝牙上键带进来的：恢复声音时音量要退回上调前（-1），记住目标
-                before = btUpRestoreVol;
-                KeepService.note("蓝牙上键：恢复声音时音量目标 = " + before);
+            if (mute && btVolRestoreTarget >= 0) {
+                // 只有蓝牙下键带进来的（用户要求 v2.33 定稿）：
+                // 恢复声音时音量 +1 回到按下前；摇一摇/语音的广告没有这个 override，原样恢复
+                before = btVolRestoreTarget;
+                KeepService.note("蓝牙下键：恢复声音时音量目标 = " + before + "（+1 还原到按下前）");
             }
             if (mute) {
                 sp.edit().putInt("volBeforeMute", before)
@@ -4460,8 +4567,8 @@ public class AutoService extends AccessibilityService {
                     }
                     KeepService.note("恢复声音：媒体音量 → " + am.getStreamVolume(stream)
                             + "（禁音前是 " + vol + "）");
-                    if (btUpRestoreVol >= 0) {
-                        btUpRestoreVol = -1; // 蓝牙上键的还原目标用完清掉
+                    if (btVolRestoreTarget >= 0) {
+                        btVolRestoreTarget = -1; // 蓝牙音量键的还原目标用完清掉
                     }
                 } else {
                     am.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, 0);
@@ -4727,6 +4834,9 @@ public class AutoService extends AccessibilityService {
                     .putBoolean("enabled", false)
                     .putBoolean("shortDrama", false)
                     .putBoolean("reading", false).apply(); // 退出自动关短剧/阅读模式
+            // 用户要求 v2.33：退出后编辑框绝不能出现——
+            // manualBoxOpen 不复位的话，看门狗 ensureOverlayAlive 会把框又补回屏幕
+            manualBoxOpen = false;
             KeepService.note("已退出：短剧模式也自动关闭了");
             skipWatching = false;
             swipeChainActive = false;

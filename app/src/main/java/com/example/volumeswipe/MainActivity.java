@@ -232,7 +232,7 @@ public class MainActivity extends Activity {
 
         etDur.setText(String.valueOf(sp.getInt("dur", 300)));
         etGap.setText(String.valueOf(sp.getInt("gap", 2000)));
-        etMicX.setText(String.valueOf(sp.getInt("micx", 22)));
+        etMicX.setText(String.valueOf(sp.getInt("micx", 32)));
         etMicY.setText(String.valueOf(sp.getInt("micy", 66)));
         etListen.setText(String.valueOf(sp.getInt("listenms", 3000) / 1000));
         etMicDelay.setText(String.valueOf(sp.getInt("micdelay", 200)));

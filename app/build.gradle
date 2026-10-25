@@ -8,8 +8,8 @@ android {
         applicationId "com.example.volumeswipe"
         minSdk 24
         targetSdk 34
-        versionCode 51
-        versionName "2.31"
+        versionCode 56
+        versionName "2.36"
         // 体积：只要手机在用的 arm64-v8a。
         // 不管的话 APK 里会同时装 x86 / x86_64 / armeabi-v7a / mips 四套 native 库，
         // 白白多出 20 多 MB。
@@ -23,9 +23,25 @@ android {
         targetCompatibility JavaVersion.VERSION_1_8
     }
 
+    signingConfigs {
+        // 统一签名（v2.36）：本地和 GitHub 云端都用项目里这一份 release.keystore，
+        // 两边打出来的 APK 签名一致 → 互相覆盖安装不用卸载，无障碍设置不再被清零。
+        // （密钥库和密码进仓库：个人项目，公开仓库也不影响——最多别人能替你签名打包）
+        unified {
+            storeFile rootProject.file('release.keystore')
+            storePassword 'volumeswipe2026'
+            keyAlias 'volumeswipe'
+            keyPassword 'volumeswipe2026'
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig signingConfigs.unified
+        }
         release {
             minifyEnabled false
+            signingConfig signingConfigs.unified
         }
     }
 

@@ -1,12 +1,22 @@
 ﻿# -*- coding: utf-8 -*-
 # 一键编译 VolumeSwipe：自动下载 JDK / Android SDK / Gradle，然后出 APK
 # 双击 build_apk.bat 即可运行本脚本
+# 工具链统一放在 D:\apktools（和源码目录分离，用户要求）：
+#   D:\apktools\jdk-17          JDK 17
+#   D:\apktools\android-sdk     Android SDK（platform-tools / android-34 / build-tools）
+#   D:\apktools\gradle-8.7      Gradle
+#   D:\apktools\vosk-model-small-cn.zip  语音包原始压缩包
+#      （真正打进 APK 的是 app/src/main/assets/model-cn/，那份在源码里不动）
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $ROOT = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ROOT
+
+# 开发环境根目录（JDK/SDK/Gradle/语音包压缩包全在这，不进源码目录）
+$TOOLS = 'D:\apktools'
+New-Item -ItemType Directory -Force -Path $TOOLS | Out-Null
 
 $JDK_URL    = 'https://mirrors.huaweicloud.com/openjdk/17.0.2/openjdk-17.0.2_windows-x64_bin.zip'
 $SDK_URL    = 'https://mirrors.cloud.tencent.com/AndroidSDK/commandlinetools-win-11076708_latest.zip'
@@ -79,18 +89,18 @@ Write-Host "=================================================" -ForegroundColor 
 
 # ---------------- 1. JDK ----------------
 Write-Step "检查 JDK 17"
-$jdkDir = Join-Path $ROOT 'jdk-17'
+$jdkDir = Join-Path $TOOLS 'jdk-17'
 if (-not (Test-Path -LiteralPath (Join-Path $jdkDir 'bin\java.exe'))) {
     if ($env:JAVA_HOME -and (Test-Path -LiteralPath (Join-Path $env:JAVA_HOME 'bin\java.exe'))) {
         $jdkDir = $env:JAVA_HOME
         Write-Host "    使用已有 JAVA_HOME: $jdkDir"
     }
     else {
-        $zip = Join-Path $ROOT 'jdk17.zip'
+        $zip = Join-Path $TOOLS 'jdk17.zip'
         Get-RemoteFile $JDK_URL $zip 100
         Remove-Safe $jdkDir
-        Expand-ZipTo $zip $ROOT
-        $found = Get-ChildItem -LiteralPath $ROOT -Directory |
+        Expand-ZipTo $zip $TOOLS
+        $found = Get-ChildItem -LiteralPath $TOOLS -Directory |
                  Where-Object { $_.Name -like 'jdk-17*' -and $_.Name -ne 'jdk-17' } |
                  Select-Object -First 1
         if ($found) {
@@ -104,7 +114,7 @@ Write-Host "    JDK: $jdkDir" -ForegroundColor Green
 
 # ---------------- 2. Android SDK ----------------
 Write-Step "检查 Android SDK commandline-tools"
-$sdkDir = Join-Path $ROOT 'android-sdk'
+$sdkDir = Join-Path $TOOLS 'android-sdk'
 $sdkManager = Join-Path $sdkDir 'cmdline-tools\latest\bin\sdkmanager.bat'
 
 if (-not (Test-Path -LiteralPath $sdkManager)) {
@@ -114,8 +124,8 @@ if (-not (Test-Path -LiteralPath $sdkManager)) {
         Write-Host "    使用已有 ANDROID_HOME: $sdkDir"
     }
     else {
-        $zip = Join-Path $ROOT 'cmdline-tools.zip'
-        $tmp = Join-Path $ROOT '_tmp_sdk'
+        $zip = Join-Path $TOOLS 'cmdline-tools.zip'
+        $tmp = Join-Path $TOOLS '_tmp_sdk'
         Get-RemoteFile $SDK_URL $zip 100
 
         Remove-Safe $tmp
@@ -123,7 +133,7 @@ if (-not (Test-Path -LiteralPath $sdkManager)) {
 
         $src = Join-Path $tmp 'cmdline-tools'
         if (-not (Test-Path -LiteralPath $src)) {
-            throw "解压后没找到 cmdline-tools 目录，zip 可能不完整，删掉 cmdline-tools.zip 重跑"
+            throw "解压后没找到 cmdline-tools 目录，zip 可能不完整，删掉 $zip 重跑"
         }
 
         $target = Join-Path $sdkDir 'cmdline-tools\latest'
@@ -141,7 +151,7 @@ Write-Host "    SDK: $sdkDir" -ForegroundColor Green
 
 # ---------------- 3. Gradle ----------------
 Write-Step "检查 Gradle 8.7"
-$gradleDir = Join-Path $ROOT 'gradle-8.7'
+$gradleDir = Join-Path $TOOLS 'gradle-8.7'
 $gradleBat = Join-Path $gradleDir 'bin\gradle.bat'
 if (-not (Test-Path -LiteralPath $gradleBat)) {
     $sys = Get-Command gradle -ErrorAction SilentlyContinue
@@ -150,9 +160,9 @@ if (-not (Test-Path -LiteralPath $gradleBat)) {
         Write-Host "    使用系统 gradle: $gradleBat"
     }
     else {
-        $zip = Join-Path $ROOT 'gradle.zip'
+        $zip = Join-Path $TOOLS 'gradle.zip'
         Get-RemoteFile $GRADLE_URL $zip 100
-        Expand-ZipTo $zip $ROOT
+        Expand-ZipTo $zip $TOOLS
         Remove-Safe $zip
     }
 }
