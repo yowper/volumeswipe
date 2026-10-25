@@ -41,7 +41,7 @@ import java.util.List;
 /**
  * 手势与命令条服务（无障碍）。
  *
- * 屏幕上常驻一条小小的命令条（待命时只显示“待命中·嗨小白”，不抢焦点）。
+ * v2.37：唤醒词「嗨小白/小白」已去掉。待命=直接听命令；说「手动」弹命令框（豆包说/打）。
  *
  * 两套识别路线，由主界面「使用豆包语音输入法」开关决定：
  *
@@ -608,10 +608,6 @@ public class AutoService extends AccessibilityService {
         if (t.length() == 0) {
             return;
         }
-        if (Commands.containsWakeWord(t)) {
-            KeepService.note("听到：「" + t + "」（含唤醒词，不当命令）");
-            return;
-        }
         int cmd = Commands.match(t);
         if (cmd == Commands.CMD_NONE) {
             KeepService.note("听到：「" + t + "」→ 不在命令表里（不执行、不提示）");
@@ -622,7 +618,7 @@ public class AutoService extends AccessibilityService {
 
     /**
      * KeepService 的本地识别引擎每命中一个词表词就调这里（主线程）。
-     * 待命阶段命中的是唤醒词；已唤醒阶段命中的是命令词。
+     * v2.37 起「嗨小白/小白」唤醒词已整个去掉：待命阶段直接听命令。
      */
     public void onEnginePhrase(String heard) {
         String t = Commands.normalize(heard);
@@ -631,34 +627,24 @@ public class AutoService extends AccessibilityService {
         }
         if (phase == PHASE_IDLE) {
             if (useDoubao()) {
-                // 用户要求：在没听到「嗨小白」之前，本地先自己认一遍 ——
-                // 只要能对上【任何】命令，就直接执行，不必先说唤醒词。
+                // 本地先自己认一遍 —— 只要能对上【任何】命令，就直接执行。
                 // 只认短句（≤ 8 字）：长句多半是视频里的话，容易误触发。
                 int quick = resolveCmd(t, true);
                 if (quick != Commands.CMD_NONE) {
                     if (t.length() <= 8) {
                         if (executeCommand(quick, t)) {
                             toastResult(quick, "执行：" + t);
-                            KeepService.note("已执行（未唤醒）：" + t);
+                            KeepService.note("已执行：" + t);
                         }
                         return;
                     }
                     KeepService.note("听到了「" + t + "」，但太长（>8 字），不当作命令");
                 }
-                if (containsWake(t)) {
-                    enterArmed();
-                }
             } else {
-                // 不用豆包：不需要唤醒词，直接听命令、直接执行，不进编辑框
-                // 退出指令先于唤醒词剥离（“小白再见”里含唤醒词“小白”）
+                // 不用豆包：直接听命令、直接执行，不进编辑框。
+                // 退出指令照旧最先判（「小白再见」保留）
                 if (resolveCmd(t, true) == Commands.CMD_EXIT) {
                     executeCommand(Commands.CMD_EXIT, t);
-                    return;
-                }
-                if (containsWake(t)) {
-                    // 用户要求：唤醒词既不执行任何动作，也不和命令组合。
-                    // 所以「嗨小白」「小白广告」「嗨小白下一集」这类一律不当命令。
-                    KeepService.note("听到唤醒词「" + t + "」：免豆包模式直接听命令，唤醒词本身不做动作");
                     return;
                 }
                 String cmdText = t;
@@ -697,13 +683,10 @@ public class AutoService extends AccessibilityService {
             if (System.currentTimeMillis() - armAt < 250) {
                 return; // 刚换完词表，上一句的残尾不可信
             }
-            // 退出指令先于唤醒词剥离（“小白再见”里含唤醒词“小白”）
+            // 退出指令照旧最先判
             if (resolveCmd(t, true) == Commands.CMD_EXIT) {
                 executeCommand(Commands.CMD_EXIT, t);
                 return;
-            }
-            if (containsWake(t)) {
-                return; // 又把唤醒词说了一遍（唤醒词不与命令组合）
             }
             String cmdText = t;
             if (useDoubao()) {
@@ -729,10 +712,6 @@ public class AutoService extends AccessibilityService {
             // 这里只留着听「小白再见」。
             if (resolveCmd(t, true) == Commands.CMD_EXIT) {
                 executeCommand(Commands.CMD_EXIT, t);
-                return;
-            }
-            if (containsWake(t)) {
-                KeepService.note("(豆包阶段又听到唤醒词，已忽略：" + t + ")");
                 return;
             }
             KeepService.note("(豆包阶段本地不接命令，已忽略：" + t + ")");
@@ -858,21 +837,13 @@ public class AutoService extends AccessibilityService {
                 || (last == Commands.CMD_PAGE_DOWN && cur == Commands.CMD_PAGE_UP);
     }
 
+    /** v2.37：唤醒词「嗨小白/小白」已整个去掉（用户要求：不再需要）——
+     *  本方法保留成恒 false，防旧代码路径误触发；「小白再见」退出不受影响（走命令表）。 */
     private boolean containsWake(String t) {
-        for (String w : WakeEngine.WAKES) {
-            if (t.contains(w)) {
-                return true;
-            }
-        }
         return false;
     }
 
     // ==================== 状态流转 ====================
-
-    /** 听到「嗨小白」：进入已唤醒 */
-    private void enterArmed() {
-        armUp(true);
-    }
 
     /**
      * 进入「准备识别」状态。
@@ -1171,7 +1142,7 @@ public class AutoService extends AccessibilityService {
         }
         if (useDoubao()) {
             showIdleBox();
-            KeepService.listenVocab(WakeEngine.idleVocab(), "在听唤醒词：说「嗨小白」");
+            KeepService.listenVocab(WakeEngine.idleVocab(), "在听命令");
         } else if (manualBoxOpen) {
             // 免豆包模式：「手动」开的命令框留在屏幕上（v2.35）
             showIdleBox();
@@ -3120,7 +3091,7 @@ public class AutoService extends AccessibilityService {
                 showIdleBox();
                 KeepService.note("输入框丢了，已复位到待命");
                 if (useDoubao()) {
-                    KeepService.listenVocab(WakeEngine.idleVocab(), "在听唤醒词：说「嗨小白」");
+                    KeepService.listenVocab(WakeEngine.idleVocab(), "在听命令");
                 } else {
                     KeepService.listenVocab(WakeEngine.commandVocab(), "直接听命令（不用豆包）");
                 }
@@ -3892,8 +3863,10 @@ public class AutoService extends AccessibilityService {
             toast("框里没有命令");
             return;
         }
-        // 不过模式白名单：错误命令也下达（用户要求）
-        int cmd = Commands.match(t);
+        // v2.37：改走 resolveCmd —— 它会先查「自己录的命令名」（RecordedCmds），
+        // 手动框里说/打录制命令的名字也能执行（之前只查内置命令表，录的名字全被拒：
+        // 「点赞」不在命令表里）
+        int cmd = resolveCmd(t, true);
         if (cmd == Commands.CMD_NONE) {
             KeepService.note("手动命令框下达：「" + t + "」（命令表里没有，不执行）");
             toast("「" + t + "」不在命令表里");
@@ -4222,7 +4195,7 @@ public class AutoService extends AccessibilityService {
             return; // 正在听一轮命令，别打断
         }
         if (useDoubao()) {
-            KeepService.listenVocab(WakeEngine.idleVocab(), "在听唤醒词：说「嗨小白」");
+            KeepService.listenVocab(WakeEngine.idleVocab(), "在听命令");
         } else {
             KeepService.listenVocab(WakeEngine.commandVocab(), "直接听命令（不用豆包）");
         }

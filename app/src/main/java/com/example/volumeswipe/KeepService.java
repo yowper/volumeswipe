@@ -23,7 +23,7 @@ import android.os.Looper;
  * 常驻服务：摇一摇触发（短剧模式专用）+ 唤醒词监听（Vosk）。
  *
  * 摇一摇（只在短剧模式）= 只上滑（需要无障碍手势能力）
- * 「嗨小白」= 弹出输入框（豆包识别命令）
+ * 「手动」= 弹出命令框（豆包语音/打字输入，再说一次「手动」执行）
  */
 public class KeepService extends Service {
 
@@ -70,7 +70,7 @@ public class KeepService extends Service {
         }
     };
     private WakeEngine wake;
-    private String lastLine = "说「嗨小白」或摇一摇";
+    private String lastLine = "在听命令（短剧里摇一摇=广告）";
     /** 最近 5 条状态（通知展开后可见，方便排查命令执行） */
     private final java.util.ArrayDeque<String> notiLog = new java.util.ArrayDeque<>();
     private boolean accLostNoted = false;
@@ -332,7 +332,7 @@ public class KeepService extends Service {
             return;
         }
         if (getSharedPreferences("cfg", MODE_PRIVATE).getBoolean("useDoubao", false)) {
-            applyVocab(WakeEngine.idleVocab(), "在听唤醒词：说「嗨小白」");
+            applyVocab(WakeEngine.idleVocab(), "在听命令");
         } else {
             // 不用豆包：不需要唤醒词，直接听命令
             applyVocab(WakeEngine.commandVocab(), "直接听命令（不用豆包）");
@@ -409,7 +409,7 @@ public class KeepService extends Service {
             @Override
             public void onReady() {
                 voiceState = "在听唤醒词";
-                updateNoti("在听唤醒词：说「嗨小白」");
+                updateNoti("在听命令");
             }
 
             @Override

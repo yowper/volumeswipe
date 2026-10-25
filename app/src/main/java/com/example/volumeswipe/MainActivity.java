@@ -158,7 +158,7 @@ public class MainActivity extends Activity {
             String log = KeepService.recentLog();
             showTextDialog("最近日志（最近 5 条）",
                     log.length() > 0 ? log
-                            : "还没有记录。\n\n先点 ④ 开启后台常驻服务，再说一句「嗨小白」试试。");
+                            : "还没有记录。\n\n先点 ④ 开启后台常驻服务，再说一句「停」试试。");
         });
 
         // ▶ 测试Mic：弹出编辑框 + 豆包键盘，你点一下键盘上的 Mic，程序记住它的位置
@@ -421,7 +421,7 @@ public class MainActivity extends Activity {
                 + "语音状态：" + KeepService.voiceState + "\n"
                 + "上次听到：" + (KeepService.lastHeard.length() > 0
                         ? KeepService.lastHeard : "（无）") + "\n"
-                + (acc ? "\n摇一摇或说「嗨小白」即可触发。" : "");
+                + (acc ? "\n短剧模式里摇一摇即可触发广告命令。" : "");
         // 最近发生了什么（通知栏只能看到几行，这里能看到全部）
         String log = KeepService.recentLog();
         if (log.length() > 0) {

@@ -44,14 +44,9 @@ public class WakeEngine {
     private static final int SAMPLE_RATE = 16000;
     private static final String ASSET_DIR = "model-cn";
 
-    /** 唤醒词。限定词表让解码空间从几万缩到几个 */
-    public static final String[] WAKES = {
-            "嗨小白", "小白"
-    };
-
-    // 词表里同时放“嗨小白”和“小白”：
-    // 模型很可能识别不出“嗨”，只吐出“小白”，那样也能触发。
-    private static final String[] DEFAULT_VOCAB = WAKES;
+    // v2.37：唤醒词「嗨小白/小白」已整个去掉（用户要求：不再需要）。
+    // 默认词表留空：真正的词表由 idleVocab()/commandVocab() 生成后 setVocab 进来。
+    private static final String[] DEFAULT_VOCAB = new String[0];
 
     private final Context ctx;
     private final Listener listener;
@@ -193,16 +188,12 @@ public class WakeEngine {
         pendingVocab = words;
     }
 
-    /** 待命词表：唤醒词 + 【全部命令词】。
-     *  用户要求：没听到「嗨小白」也要能下命令 —— 本地先自己认一遍，
-     *  能对上就直接执行（所以待命词表就是整个命令表），
+    /** 待命词表：【全部命令词】（v2.37 起没有唤醒词了）。
+     *  本地直接认命令，能对上就直接执行，
      *  另外加上几个豆包口语说法和「打开某 App」的词。 */
     public static String[] idleVocab() {
         java.util.LinkedHashSet<String> set = new java.util.LinkedHashSet<>();
-        for (String w : WAKES) {
-            set.add(w);
-        }
-        // 整个命令表（含唤醒词、豆包开关、App 名字）
+        // 整个命令表（含豆包开关、App 名字）
         for (String k : Commands.COMMAND_VOCAB()) {
             set.add(k);
         }
@@ -224,14 +215,11 @@ public class WakeEngine {
         return set.toArray(new String[0]);
     }
 
-    /** 命令模式词表：所有命令关键词 + 唤醒词 */
+    /** 命令模式词表：所有命令关键词（v2.37 起没有唤醒词了） */
     public static String[] commandVocab() {
         java.util.LinkedHashSet<String> set = new java.util.LinkedHashSet<>();
         for (String k : Commands.COMMAND_VOCAB()) {
             set.add(k);
-        }
-        for (String w : WAKES) {
-            set.add(w);
         }
         // 自己录制的语音命令（录制模式）
         for (String r : RecordedCmds.names()) {

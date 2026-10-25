@@ -384,15 +384,4 @@ public final class Commands {
     public static boolean isCommand(String text) {
         return match(text) != CMD_NONE;
     }
-
-    /** 这句话里有没有唤醒词（唤醒词不允许和命令组合） */
-    public static boolean containsWakeWord(String text) {
-        String t = normalize(text);
-        for (String w : WakeEngine.WAKES) {
-            if (t.contains(w)) {
-                return true;
-            }
-        }
-        return false;
-    }
 }
